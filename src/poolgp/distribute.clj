@@ -107,6 +107,13 @@
             (recur (if ind (conj returned ind) returned))))
         returned)))
 
+(defn- unpack-indivs
+  "take individuals returned from poolgp workers and strips off extra
+  information (returns clojush.individual)"
+  [poolgp-indivs]
+  ;TODO: aggregate fitness, etc...
+  (map :indiv poolgp-indivs))
+
 (defn eval-indivs
   "take individual list,
   server config, evaluate,
@@ -132,6 +139,7 @@
       ;task that prepares individuals and pushes to outgoing channel
       (distribution-task indivs config))
       ;task that listens for incoming individuals
-      (incoming-socket-worker
-          incoming-socket
-          (int (* (count indivs) (:accepted-return config))))))
+      (unpack-indivs
+        (incoming-socket-worker
+            incoming-socket
+            (int (* (count indivs) (:accepted-return config)))))))
