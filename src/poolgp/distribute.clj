@@ -1,8 +1,6 @@
 (ns poolgp.distribute
   (:require [clojure.core.async :as async]
             [clojure.java.io :as io])
-  (:import java.text.SimpleDateFormat)
-  (:import java.util.Date)
   (:import [java.net ServerSocket SocketException Socket])
   (:gen-class))
 
@@ -11,6 +9,10 @@
 (def OUTGOING-CHAN (async/chan 500))
 
 (def RUNNING? (atom true))
+
+(defn- log
+  [msg]
+  (println "poolgp.distribute => " msg))
 
 (defn- make-opp-packet
   "make a clojure map for distributing
@@ -34,6 +36,7 @@
   "attempt to reach a worker node (on startup)"
   [hostname port]
   (loop []
+    (log (str "Attempting to reach eval host " hostname " on port " port))
     (let [status
       (try
         (Socket. hostname port)
@@ -107,18 +110,21 @@
 (defn eval-indivs
   "take individual list,
   server config, evaluate,
-  return individual list"
+  return individual list
+  IN: (list clojush.indvidual)
+  OUT: (list clojush.individual)
+  "
   [indivs config]
   (let
     [incoming-socket (ServerSocket. (:incoming-port config))
      opp-pool-socket (ServerSocket. (:opp-pool-req-p config))]
     (do
+      ;wait for connectivity
       (check-worker-status (:host config) (:outgoing-port config))
       ;set infinite timeout
       (.setSoTimeout incoming-socket 0)
       (.setSoTimeout opp-pool-socket 0)
-      (println (.format (SimpleDateFormat. "'['MM-dd-yyyy HH:mm.ss']'") (Date.)))
-      ;worker that responds to pool requests
+      ;worker that responds to opp pool requests
       (opp-pool-worker opp-pool-socket indivs)
       ;server worker that sends individuals out that arrive on outgoing channel
       (async-distribution-server
