@@ -2,17 +2,20 @@
   (:require [clojure.core.async :as async]
             [clojure.java.io :as io])
   (:import [java.net ServerSocket SocketException Socket])
+  (:import java.io.PrintWriter)
   (:gen-class))
 
 (def CURRENT-CYCLE (atom 0))
+(def INCOMING-WORKER-STARTED? (atom false))
+(def OPP-POOL-WORKER-STARTED? (atom false))
+(def DIST-SERVER-STARTED? (atom false))
 
-(def OUTGOING-CHAN (async/chan 500))
-
-(def RUNNING? (atom true))
+(def COMPLETED-CHAN (async/chan 1000))
+(def PENDING-DIST-CHAN (async/chan 1000))
 
 (defn- log
   [msg]
-  (println "poolgp.distribute => " msg))
+  (println "poolgp.distribute =>" msg))
 
 (defn- make-opp-packet
   "make a clojure map for distributing
@@ -36,7 +39,7 @@
   "attempt to reach a worker node (on startup)"
   [hostname port]
   (loop []
-    (log (str "Attempting to reach eval host " hostname " on port " port))
+    (log (str "Attempting to reach eval host " hostname ":" port))
     (let [status
       (try
         (Socket. hostname port)
@@ -48,25 +51,29 @@
             (Thread/sleep 5000)
             (recur))))))
 
-(defn- async-distribution-server
+(defn- distribution-worker
   "take a socket and an individual and send"
   [host port]
+  (reset! DIST-SERVER-STARTED? true)
   (async/go-loop []
-    (let [socket (Socket. host port)
-          ind (async/<! OUTGOING-CHAN)
-          writer (io/writer socket)]
-      (do
-        (.write writer (str (pr-str ind) "\n"))
+    (let [indiv (async/<! PENDING-DIST-CHAN)
+          client-socket (Socket. host port)]
+      (with-open [writer (io/writer client-socket)]
+        (.write writer (str (pr-str (make-indiv-packet indiv)) "\n"))
         (.flush writer)
-        (.close socket)))
-    (if @RUNNING?
-      (recur))))
+        (.close client-socket)
+        ))))
 
 (defn- opp-pool-worker
   "start a thread that servers opponent pool requests"
-  [socket opponents]
+  [port opponents]
+  ;TODO purge after cycle
+  (reset! OPP-POOL-WORKER-STARTED? true)
+  (println "Setting opp pool of size: " (count opponents))
   (future
-    (let [outgoing-ops (map make-opp-packet opponents (range))]
+    (let [socket (ServerSocket. port)
+          outgoing-ops (map make-opp-packet opponents (range))]
+      (.setSoTimeout socket 0)
       (loop []
         (let [client-socket (.accept socket)
               writer (io/writer client-socket)]
@@ -80,66 +87,64 @@
             (.close client-socket))
       (recur)))))
 
-(defn- distribution-task
-  "start a distribution service
-  that listens on outgoing channel"
-  [indivs config]
-  (async/go-loop [ind-rem indivs]
-    (if (not (empty? ind-rem))
-      (do
-        (async/>! OUTGOING-CHAN (make-indiv-packet (take 1 ind-rem)))
-        (recur (drop 1 ind-rem)))
-      (swap! CURRENT-CYCLE inc))))
+(defn- unpack-indiv
+  "take individuals returned from poolgp workers and strips off extra
+  information (returns clojush.individual)"
+  [poolgp-indiv]
+  ;TODO: aggregate fitness, etc...
+    (:indiv poolgp-indiv))
 
 (defn- incoming-socket-worker
   "start a listener for completed individuals"
-  [socket accepted]
-  (loop [returned (list)]
-    (if (> accepted (count returned))
-        ;if not received "all" indivs
-        (let [client-socket (.accept socket)
-              ind (try
-                    (.readLine (io/reader client-socket))
-                  (catch SocketException e
-                    nil))]
-          (do
-            (.close client-socket)
-            (recur (if ind (conj returned ind) returned))))
-        returned)))
+  [port]
+  (reset! INCOMING-WORKER-STARTED? true)
+  (let [socket (ServerSocket. port)]
+    (.setSoTimeout socket 0)
+    (async/go-loop []
+      (let [client-socket (.accept socket)
+            ind (try
+                  (.readLine (io/reader client-socket))
+                (catch SocketException e
+                  nil))]
+          (if (not (= ind nil))
+            (async/>! COMPLETED-CHAN (unpack-indiv ind)))
+          (recur)))))
 
-(defn- unpack-indivs
-  "take individuals returned from poolgp workers and strips off extra
-  information (returns clojush.individual)"
-  [poolgp-indivs]
-  ;TODO: aggregate fitness, etc...
-  (map :indiv poolgp-indivs))
+(defn- verify-indiv
+  [indiv]
+  )
 
-(defn eval-indivs
-  "take individual list,
+(defn- get-return-indiv
+  []
+  (async/go (async/<!! COMPLETED-CHAN)))
+
+(defn eval-indiv
+  "take individual, opponent list,
   server config, evaluate,
   return individual list
   IN: (list clojush.indvidual)
   OUT: (list clojush.individual)
   "
-  [indivs config]
-  (let
-    [incoming-socket (ServerSocket. (:incoming-port config))
-     opp-pool-socket (ServerSocket. (:opp-pool-req-p config))]
-    (do
-      ;wait for connectivity
-      (check-worker-status (:host config) (:outgoing-port config))
-      ;set infinite timeout
-      (.setSoTimeout incoming-socket 0)
-      (.setSoTimeout opp-pool-socket 0)
-      ;worker that responds to opp pool requests
-      (opp-pool-worker opp-pool-socket indivs)
-      ;server worker that sends individuals out that arrive on outgoing channel
-      (async-distribution-server
-        (:host config) (:outgoing-port config))
-      ;task that prepares individuals and pushes to outgoing channel
-      (distribution-task indivs config))
-      ;task that listens for incoming individuals
-      (unpack-indivs
-        (incoming-socket-worker
-            incoming-socket
-            (int (* (count indivs) (:accepted-return config)))))))
+  [indiv opponents config]
+    ;wait for connectivity
+    ; (check-worker-status (:host config) (:outgoing-port config))
+    ; (log "Connected to eval worker")
+    (async/go (async/>! PENDING-DIST-CHAN indiv))
+    ;set infinite timeout
+
+
+    ;worker that responds to opp pool requests
+    (if (not @OPP-POOL-WORKER-STARTED?)
+      (opp-pool-worker (:opp-pool-req-p config) opponents))
+
+    ;server worker that sends individuals out that arrive on outgoing channel
+    (if (not @DIST-SERVER-STARTED?)
+      (distribution-worker (:host config) (:outgoing-port config)))
+
+    ;task that listens for incoming individuals
+    (if (not @INCOMING-WORKER-STARTED?)
+      (incoming-socket-worker (:incoming-port config)))
+
+    ;take an individual from the completed channel
+    (get-return-indiv)
+    (println "HERE"))
