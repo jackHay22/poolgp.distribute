@@ -97,17 +97,14 @@
     (.setSoTimeout socket 0)
     (async/go-loop []
       (let [client-socket (.accept socket)
-            ind (try
+            ind (read-string (try
                   (.readLine (io/reader client-socket))
                 (catch SocketException e
-                  nil))]
-          (if (not (= ind nil))
-            (async/>! COMPLETED-CHAN (read-string ind)))
+                  nil)))]
+          (if (and (not (= ind nil)) (record? ind))
+            (async/>! COMPLETED-CHAN ind)
+            (log (str "ERROR: failed to ingest individual: " ind)))
           (recur)))))
-
-(defn- verify-indiv
-  [indiv]
-  )
 
 (defn eval-indiv
   "take individual, opponent list,
@@ -124,7 +121,8 @@
                   @DIST-SERVER-STARTED?
                   @INCOMING-WORKER-STARTED?)
         (async/go (async/>! PENDING-DIST-CHAN indiv))
-        (log "Error: one or more services not started before trying to distribute individuals! (use `(start-dist-services config)`)"))
+        (log "Error: one or more services not started before trying to
+              distribute individuals! (use `(start-dist-services config)`)"))
 
     ;take an individual from the completed channel
     ;(blocking wait)
@@ -143,12 +141,15 @@
   [config]
   ;worker that responds to opp pool requests
   (if (not @OPP-POOL-WORKER-STARTED?)
-    (opp-pool-worker (:opp-pool-req-p config)))
+    (opp-pool-worker (:opp-pool-req-p config))
+    (log "Already started opponent pool worker"))
 
   ;server worker that sends individuals out that arrive on outgoing channel
   (if (not @DIST-SERVER-STARTED?)
-    (distribution-worker (:host config) (:outgoing-port config)))
+    (distribution-worker (:host config) (:outgoing-port config))
+    (log "Already started distribution server"))
 
   ;task that listens for incoming individuals
   (if (not @INCOMING-WORKER-STARTED?)
-    (incoming-socket-worker (:incoming-port config))))
+    (incoming-socket-worker (:incoming-port config))
+    (log "Already started incoming server worker")))
