@@ -25,7 +25,6 @@
   [indiv id]
   {:indiv indiv ;clojush individual containing :program
    :cycle @CURRENT-CYCLE
-   :type :opponent
    :eval-id id}) ;1->total
 
 (defn- make-indiv-packet
@@ -34,7 +33,6 @@
   [indiv]
   {:indiv indiv ;clojush individual containing :program
    :cycle @CURRENT-CYCLE
-   :type :individual
    :eval-id (java.util.UUID/randomUUID)}) ;random
 
 (defn- check-worker-status
