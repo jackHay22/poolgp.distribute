@@ -1,4 +1,5 @@
 # poolgp.distribute
+[![Clojars Project](https://img.shields.io/clojars/v/poolgp.distribute.svg)](https://clojars.org/poolgp.distribute)
 
 A Clojure library for using a genetic programming system with the poolgp distributed evaluation system.
 
