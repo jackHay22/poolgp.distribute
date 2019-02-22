@@ -5,7 +5,7 @@
   (:import java.io.PrintWriter)
   (:gen-class))
 
-(def CURRENT-CYCLE (atom 0))
+(def CURRENT-CYCLE (atom -1))
 (def INCOMING-WORKER-STARTED? (atom false))
 (def OPP-POOL-WORKER-STARTED? (atom false))
 (def DIST-SERVER-STARTED? (atom false))
@@ -67,7 +67,6 @@
 (defn- opp-pool-worker
   "start a thread that servers opponent pool requests"
   [port]
-  ;TODO purge after cycle
   (reset! OPP-POOL-WORKER-STARTED? true)
   (log "Starting opponent pool worker...")
   (future
