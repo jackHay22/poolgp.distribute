@@ -22,34 +22,16 @@
 (defn- make-opp-packet
   "make a clojure map for distributing
   opponents to eval workers"
-  [indiv id]
+  [indiv]
   {:indiv indiv ;clojush individual containing :program
-   :cycle @CURRENT-CYCLE
-   :eval-id id}) ;1->total
+   :cycle @CURRENT-CYCLE}) ;1->total
 
 (defn- make-indiv-packet
   "make a clojure map for distributing
   individual to eval workers"
   [indiv]
   {:indiv indiv ;clojush individual containing :program
-   :cycle @CURRENT-CYCLE
-   :eval-id (java.util.UUID/randomUUID)}) ;random
-
-(defn- check-worker-status
-  "attempt to reach a worker node (on startup)"
-  [hostname port]
-  (loop []
-    (log (str "Attempting to reach eval host " hostname ":" port))
-    (let [status
-      (try
-        (Socket. hostname port)
-        true
-        (catch Exception e
-          false))]
-      (if (not status)
-        (do
-            (Thread/sleep 5000)
-            (recur))))))
+   :cycle @CURRENT-CYCLE}) ;random
 
 (defn- distribution-worker
   "take a socket and an individual and send"
@@ -78,7 +60,7 @@
             (try
               (doall (map
                 #(.write writer (str (pr-str %) "\n"))
-                      (map make-opp-packet @OPPONENT-POOL (range))))
+                      (map make-opp-packet @OPPONENT-POOL)))
               (catch Exception e
                 (.printStackTrace e)))
             (.flush writer)
@@ -111,16 +93,12 @@
   OUT: (list clojush.individual)
   "
   [indiv]
-    ;wait for connectivity
-    ; (check-worker-status (:host config) (:outgoing-port config))
-    ; (log "Connected to eval worker")
     (if (and @OPP-POOL-WORKER-STARTED?
-                  @DIST-SERVER-STARTED?
-                  @INCOMING-WORKER-STARTED?)
+             @DIST-SERVER-STARTED?
+             @INCOMING-WORKER-STARTED?)
         (async/go (async/>! PENDING-DIST-CHAN indiv))
         (log "Error: one or more services not started before trying to
               distribute individuals! (use `(start-dist-services config)`)"))
-
     ;take an individual from the completed channel
     ;(blocking wait)
     (async/<!! COMPLETED-CHAN))
@@ -132,6 +110,19 @@
   (reset! OPPONENT-POOL opponents)
   (log "Updating cycle")
   (swap! CURRENT-CYCLE inc))
+
+(defn merge-opp-performance
+  "merge results as opponent back into individual"
+  [indiv population]
+  (if (map? (:errors indiv))
+      ;extract own error value as opponent from each indiv
+      (reduce #(update %1 :errors
+                  concat ((:uuid %1) (:errors %2)))
+               ;remove opponent errors
+               (assoc indiv :errors
+                 (:self (:errors indiv)))
+               population)
+      indiv))
 
 (defn start-dist-services
   "start core services (once)"
