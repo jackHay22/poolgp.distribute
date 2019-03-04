@@ -82,24 +82,29 @@
             (count (keys (:opp (:errors ind)))))
       ;extract own error value as opponent from each indiv
       (do
-        (log (str "Merging opponent errors for " (count @MERGE-POOL)))
-        (doall
-          (map (fn [indiv]
-                (async/>! COMPLETED-CHAN
-                  (reduce #(update %1 :errors
-                              concat ((:uuid %1) (:errors %2)))
-                           ;remove opponent errors
-                           (assoc indiv :errors
-                             (:self (:errors indiv)))
-                           @MERGE-POOL)))
-               @MERGE-POOL))))))
+        (log (str "Merging opponent errors for "
+                  (count @MERGE-POOL) " individuals"))
+        (async/go-loop [indivs @MERGE-POOL]
+          (if (not (empty? indivs))
+            (do
+              (async/>! COMPLETED-CHAN
+                (reduce #(update %1 :errors
+                            concat ((keyword (str (:uuid %1)))
+                                    (:errors %2)))
+                         ;remove opponent errors
+                         (assoc (first indivs) :errors
+                           (:self (:errors (first indivs))))
+                         @MERGE-POOL))
+              (recur (rest indivs)))))))))
 
 (defn- incoming-socket-worker
   "start a listener for completed individuals"
   [port]
+  ;prevent restart collision
   (reset! INCOMING-WORKER-STARTED? true)
   (log "Starting incoming socket worker...")
   (let [socket (ServerSocket. port)]
+    ;infinite timeout
     (.setSoTimeout socket 0)
     (async/go-loop []
       (let [client-socket (.accept socket)
