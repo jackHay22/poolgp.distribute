@@ -15,6 +15,8 @@
 
 (def OPPONENT-POOL (atom nil))
 
+(def MERGE-POOL (atom (list)))
+
 (defn- log
   [msg]
   (println "poolgp.distribute =>" msg))
@@ -67,6 +69,31 @@
             (.close client-socket))
       (recur)))))
 
+
+(defn- merge-accumulator!
+  "accumulate individuals after testing, merge
+  fitness as opponent"
+  [ind]
+  (do
+    ;add to merge pool
+    (swap! MERGE-POOL conj ind)
+
+    (if (>= (count @MERGE-POOL)
+            (count (keys (:opp (:errors ind)))))
+      ;extract own error value as opponent from each indiv
+      (do
+        (log (str "Merging opponent errors for " (count @MERGE-POOL)))
+        (doall
+          (map (fn [indiv]
+                (async/>! COMPLETED-CHAN
+                  (reduce #(update %1 :errors
+                              concat ((:uuid %1) (:errors %2)))
+                           ;remove opponent errors
+                           (assoc indiv :errors
+                             (:self (:errors indiv)))
+                           @MERGE-POOL)))
+               @MERGE-POOL))))))
+
 (defn- incoming-socket-worker
   "start a listener for completed individuals"
   [port]
@@ -81,17 +108,13 @@
                 (catch SocketException e
                   nil)))]
           (if (and (not (= ind nil)) (record? ind))
-            (async/>! COMPLETED-CHAN ind)
+            (merge-accumulator! ind)
             (log (str "ERROR: failed to ingest individual: " ind)))
           (recur)))))
 
 (defn eval-indiv
-  "take individual, opponent list,
-  server config, evaluate,
-  return individual list
-  IN: (list clojush.indvidual)
-  OUT: (list clojush.individual)
-  "
+  "IN: (list clojush.indvidual)
+   OUT: (list clojush.individual)"
   [indiv]
     (if (and @OPP-POOL-WORKER-STARTED?
              @DIST-SERVER-STARTED?
@@ -108,21 +131,10 @@
   [opponents]
   (log "Registering opponent pool")
   (reset! OPPONENT-POOL opponents)
+  ;clear merge pool
+  (reset! MERGE-POOL (list))
   (log "Updating cycle")
   (swap! CURRENT-CYCLE inc))
-
-(defn merge-opp-performance
-  "merge results as opponent back into individual"
-  [indiv population]
-  (if (map? (:errors indiv))
-      ;extract own error value as opponent from each indiv
-      (reduce #(update %1 :errors
-                  concat ((:uuid %1) (:errors %2)))
-               ;remove opponent errors
-               (assoc indiv :errors
-                 (:self (:errors indiv)))
-               population)
-      indiv))
 
 (defn start-dist-services
   "start core services (once)"
