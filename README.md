@@ -16,21 +16,26 @@ In your ns declaration: `(:require [poolgp.distribute :as poolgp])`
 ;wait for eval containers to start
 (Thread/sleep 10000)
 
-;start distribution worker, opp pool worker, and return worker (if not started)
 (poolgp/start-dist-services {
   :incoming-port 8000
   :outgoing-port 9999
   :opp-pool-req-p 8888
   :host "eval"})
 
-;register opponents for distribution
 (poolgp/register-opponents (map deref pop-agents))
 
-;send evaluation function to agents
 (dorun (map #((if use-single-thread swap! send)
-             %1 evaluate-individual poolgp/eval-indiv %2 argmap)
-           pop-agents
-           rand-gens))
+             %1 poolgp/eval-indiv)
+           pop-agents))
+
+(when-not use-single-thread (apply await pop-agents)) ;; SYNCHRONIZE
+
+(let [opps (map deref pop-agents)]
+ (dorun (map #((if use-single-thread swap! send)
+               %1 evaluate-individual (fn [i] (poolgp/merge-fitness i opps)) %2
+                                               (assoc argmap :reuse-errors false))
+             pop-agents
+             rand-gens)))
 ```
 
 ## License

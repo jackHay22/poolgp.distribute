@@ -15,8 +15,6 @@
 
 (def OPPONENT-POOL (atom nil))
 
-(def MERGE-POOL (atom (list)))
-
 (defn- log
   [msg]
   (println "poolgp.distribute =>" msg))
@@ -70,32 +68,17 @@
       (recur)))))
 
 
-(defn- merge-accumulator!
+(defn merge-fitness
   "accumulate individuals after testing, merge
   fitness as opponent"
-  [ind]
-  (do
-    ;add to merge pool
-    (swap! MERGE-POOL conj ind)
-
-    (if (>= (count @MERGE-POOL)
-            (count (keys (:opp (:errors ind)))))
-      ;extract own error value as opponent from each indiv
-      (do
-        (log (str "Merging opponent errors for "
-                  (count @MERGE-POOL) " individuals"))
-        (async/go-loop [indivs @MERGE-POOL]
-          (if (not (empty? indivs))
-            (do
-              (async/>! COMPLETED-CHAN
-                (reduce #(update %1 :errors
-                            concat ((keyword (str (:uuid %1)))
-                                    (:errors %2)))
-                         ;remove opponent errors
-                         (assoc (first indivs) :errors
-                           (:self (:errors (first indivs))))
-                         @MERGE-POOL))
-              (recur (rest indivs)))))))))
+  [ind population]
+  (reduce #(update %1 :errors
+              concat ((keyword (str (:uuid %1)))
+                      (:opp (:errors %2))))
+           ;remove opponent errors
+           (assoc ind :errors
+             (:self (:errors ind)))
+           population))
 
 (defn- incoming-socket-worker
   "start a listener for completed individuals"
@@ -113,7 +96,7 @@
                 (catch SocketException e
                   nil)))]
           (if (and (not (= ind nil)) (record? ind))
-            (merge-accumulator! ind)
+            (async/>! COMPLETED-CHAN ind)
             (log (str "ERROR: failed to ingest individual: " ind)))
           (recur)))))
 
@@ -121,23 +104,22 @@
   "IN: (list clojush.indvidual)
    OUT: (list clojush.individual)"
   [indiv]
-    (if (and @OPP-POOL-WORKER-STARTED?
-             @DIST-SERVER-STARTED?
-             @INCOMING-WORKER-STARTED?)
-        (async/go (async/>! PENDING-DIST-CHAN indiv))
-        (log "Error: one or more services not started before trying to
-              distribute individuals! (use `(start-dist-services config)`)"))
-    ;take an individual from the completed channel
-    ;(blocking wait)
-    (async/<!! COMPLETED-CHAN))
+  (if (and @OPP-POOL-WORKER-STARTED?
+           @DIST-SERVER-STARTED?
+           @INCOMING-WORKER-STARTED?)
+      (async/go
+        (async/>! PENDING-DIST-CHAN indiv))
+      (log "Error: one or more services not started before trying to
+            distribute individuals! (use `(start-dist-services config)`)"))
+  ;take an individual from the completed channel
+  ;(blocking wait)
+  (async/<!! COMPLETED-CHAN))
 
 (defn register-opponents
   "register opponents for a cycle"
   [opponents]
   (log "Registering opponent pool")
   (reset! OPPONENT-POOL opponents)
-  ;clear merge pool
-  (reset! MERGE-POOL (list))
   (log "Updating cycle")
   (swap! CURRENT-CYCLE inc))
 
