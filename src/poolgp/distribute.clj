@@ -67,18 +67,18 @@
             (.close client-socket))
       (recur)))))
 
-
 (defn merge-fitness
   "accumulate individuals after testing, merge
   fitness as opponent"
   [ind population]
-  (reduce #(update %1 :errors
-              concat ((keyword (str (:uuid %1)))
-                      (:opp (:errors %2))))
+  ; (reduce #(update %1 :errors
+  ;             concat ((keyword (str (:uuid %1)))
+  ;                     (:opp (:errors %2))))
            ;remove opponent errors
            (assoc ind :errors
              (:self (:errors ind)))
-           population))
+             )
+           ;population))
 
 (defn- incoming-socket-worker
   "start a listener for completed individuals"
